@@ -26,7 +26,7 @@ func TestRecordTelemetry(t *testing.T) {
 		root.AddCommand(parent)
 		parent.AddCommand(cmd)
 
-		cmdutil.RecordTelemetry(cmd, recorder)
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
 
 		require.NoError(t, cmd.Flags().Set("web", "true"))
 		require.NoError(t, cmd.Flags().Set("repo", "cli/cli"))
@@ -43,7 +43,7 @@ func TestRecordTelemetry(t *testing.T) {
 		recorder := &telemetry.EventRecorderSpy{}
 		cmd := &cobra.Command{Use: "test"}
 
-		cmdutil.RecordTelemetry(cmd, recorder)
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
 
 		assert.Nil(t, cmd.RunE, "RunE should remain nil when it was nil before")
 		assert.Empty(t, recorder.Events, "no telemetry should be recorded")
@@ -57,7 +57,7 @@ func TestRecordTelemetry(t *testing.T) {
 			RunE: func(cmd *cobra.Command, args []string) error { return expectedErr },
 		}
 
-		cmdutil.RecordTelemetry(cmd, recorder)
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
 
 		err := cmd.RunE(cmd, nil)
 		assert.ErrorIs(t, err, expectedErr)
@@ -76,7 +76,7 @@ func TestRecordTelemetry(t *testing.T) {
 		cmd.Flags().Bool("alpha", false, "")
 		cmd.Flags().Bool("middle", false, "")
 
-		cmdutil.RecordTelemetry(cmd, recorder)
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
 
 		require.NoError(t, cmd.Flags().Set("zebra", "true"))
 		require.NoError(t, cmd.Flags().Set("alpha", "true"))
@@ -95,7 +95,7 @@ func TestRecordTelemetry(t *testing.T) {
 		}
 		cmd.Flags().Bool("unused", false, "")
 
-		cmdutil.RecordTelemetry(cmd, recorder)
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
 		require.NoError(t, cmd.RunE(cmd, nil))
 
 		require.Len(t, recorder.Events, 1)
@@ -109,10 +109,46 @@ func TestRecordTelemetry(t *testing.T) {
 			RunE: func(cmd *cobra.Command, args []string) error { return nil },
 		}
 		cmdutil.DisableTelemetry(cmd)
-		cmdutil.RecordTelemetry(cmd, recorder)
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
 
 		require.NoError(t, cmd.RunE(cmd, nil))
 		assert.Empty(t, recorder.Events, "telemetry should not be recorded for disabled commands")
+	})
+
+	t.Run("records guessed_host_type from --repo flag", func(t *testing.T) {
+		recorder := &telemetry.EventRecorderSpy{}
+		cmd := &cobra.Command{
+			Use:  "view",
+			RunE: func(cmd *cobra.Command, args []string) error { return nil },
+		}
+		cmd.Flags().String("repo", "", "")
+		root := &cobra.Command{Use: "gh"}
+		root.AddCommand(cmd)
+
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
+
+		require.NoError(t, cmd.Flags().Set("repo", "cli/cli"))
+		require.NoError(t, cmd.RunE(cmd, nil))
+
+		require.Len(t, recorder.Events, 1)
+		assert.Equal(t, "github.com", recorder.Events[0].Dimensions["guessed_host_type"])
+	})
+
+	t.Run("records uncategorized when no signal is available", func(t *testing.T) {
+		recorder := &telemetry.EventRecorderSpy{}
+		t.Setenv("GH_REPO", "")
+		cmd := &cobra.Command{
+			Use:  "view",
+			RunE: func(cmd *cobra.Command, args []string) error { return nil },
+		}
+		root := &cobra.Command{Use: "gh"}
+		root.AddCommand(cmd)
+
+		cmdutil.RecordTelemetry(cmd, nil, nil, recorder)
+		require.NoError(t, cmd.RunE(cmd, nil))
+
+		require.Len(t, recorder.Events, 1)
+		assert.Equal(t, "uncategorized", recorder.Events[0].Dimensions["guessed_host_type"])
 	})
 }
 
@@ -129,7 +165,7 @@ func TestRecordTelemetryForSubcommands(t *testing.T) {
 		root.AddCommand(parent)
 		parent.AddCommand(child)
 
-		cmdutil.RecordTelemetryForSubcommands(root, recorder)
+		cmdutil.RecordTelemetryForSubcommands(root, nil, nil, recorder)
 		require.NoError(t, child.RunE(child, nil))
 
 		require.Len(t, recorder.Events, 1)
@@ -144,7 +180,7 @@ func TestRecordTelemetryForSubcommands(t *testing.T) {
 		child := &cobra.Command{Use: "help"} // no RunE
 		root.AddCommand(child)
 
-		cmdutil.RecordTelemetryForSubcommands(root, recorder)
+		cmdutil.RecordTelemetryForSubcommands(root, nil, nil, recorder)
 
 		assert.Nil(t, child.RunE, "nil RunE should remain nil")
 	})
@@ -160,7 +196,7 @@ func TestRecordTelemetryForSubcommands(t *testing.T) {
 		cmdutil.DisableTelemetry(child)
 		root.AddCommand(child)
 
-		cmdutil.RecordTelemetryForSubcommands(root, recorder)
+		cmdutil.RecordTelemetryForSubcommands(root, nil, nil, recorder)
 		require.NoError(t, child.RunE(child, nil))
 
 		assert.Empty(t, recorder.Events, "disabled commands should not record telemetry")

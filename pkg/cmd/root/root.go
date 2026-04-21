@@ -248,7 +248,7 @@ func NewCmdRoot(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, versi
 	}
 
 	cmdutil.DisableAuthCheck(cmd)
-	cmdutil.RecordTelemetryForSubcommands(cmd, telemetry)
+	cmdutil.RecordTelemetryForSubcommands(cmd, f.BaseRepo, f.Config, telemetry)
 
 	// The reference command produces paged output that displays information on every other command.
 	// Therefore, we explicitly set the Long text and HelpFunc here after all other commands are registered.

@@ -4,12 +4,25 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/gh/ghtelemetry"
+	"github.com/cli/cli/v2/internal/ghinstance"
+	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/telemetry"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-func RecordTelemetry(cmd *cobra.Command, telemetry ghtelemetry.EventRecorder) {
+// RecordTelemetry wraps cmd.RunE so that a command_invocation event is recorded
+// after the command runs. baseRepo and config are optional (nil-safe) and are
+// used to guess the target host for the guessed_host_type dimension; callers
+// typically pass cmdutil.Factory.BaseRepo and cmdutil.Factory.Config.
+func RecordTelemetry(
+	cmd *cobra.Command,
+	baseRepo func() (ghrepo.Interface, error),
+	config func() (gh.Config, error),
+	recorder ghtelemetry.EventRecorder,
+) {
 	if isTelemetryDisabled(cmd) {
 		return
 	}
@@ -28,11 +41,14 @@ func RecordTelemetry(cmd *cobra.Command, telemetry ghtelemetry.EventRecorder) {
 		})
 		slices.Sort(flags)
 
-		telemetry.Record(ghtelemetry.Event{
+		host := telemetry.GuessTargetHost(cmd, baseRepo, config)
+
+		recorder.Record(ghtelemetry.Event{
 			Type: "command_invocation",
 			Dimensions: map[string]string{
-				"command": cmd.CommandPath(),
-				"flags":   strings.Join(flags, ","),
+				"command":           cmd.CommandPath(),
+				"flags":             strings.Join(flags, ","),
+				"guessed_host_type": ghinstance.CategorizeHost(host),
 			},
 		})
 
@@ -40,10 +56,17 @@ func RecordTelemetry(cmd *cobra.Command, telemetry ghtelemetry.EventRecorder) {
 	}
 }
 
-func RecordTelemetryForSubcommands(cmd *cobra.Command, telemetry ghtelemetry.EventRecorder) {
+// RecordTelemetryForSubcommands recursively applies RecordTelemetry to every
+// subcommand of cmd.
+func RecordTelemetryForSubcommands(
+	cmd *cobra.Command,
+	baseRepo func() (ghrepo.Interface, error),
+	config func() (gh.Config, error),
+	recorder ghtelemetry.EventRecorder,
+) {
 	for _, c := range cmd.Commands() {
-		RecordTelemetry(c, telemetry)
-		RecordTelemetryForSubcommands(c, telemetry)
+		RecordTelemetry(c, baseRepo, config, recorder)
+		RecordTelemetryForSubcommands(c, baseRepo, config, recorder)
 	}
 }
 
