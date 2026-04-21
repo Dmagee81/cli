@@ -31,14 +31,35 @@ func (fe *FlagError) Unwrap() error {
 	return fe.err
 }
 
-// SilentError is an error that triggers exit code 1 without any error messaging
-var SilentError = errors.New("SilentError")
+// silentError triggers exit code 1 without any error messaging.
+type silentError struct{}
 
-// CancelError signals user-initiated cancellation
-var CancelError = errors.New("CancelError")
+func (silentError) Error() string { return "SilentError" }
 
-// PendingError signals nothing failed but something is pending
-var PendingError = errors.New("PendingError")
+// cancelError signals user-initiated cancellation.
+type cancelError struct{}
+
+func (cancelError) Error() string { return "CancelError" }
+
+// pendingError signals nothing failed but something is pending.
+type pendingError struct{}
+
+func (pendingError) Error() string { return "PendingError" }
+
+// SilentError is an error that triggers exit code 1 without any error messaging.
+// Backed by a distinct concrete type so it is distinguishable from other sentinels
+// in telemetry (via %T) while remaining usable with errors.Is.
+var SilentError error = silentError{}
+
+// CancelError signals user-initiated cancellation. Backed by a distinct concrete
+// type so it is distinguishable from other sentinels in telemetry (via %T) while
+// remaining usable with errors.Is.
+var CancelError error = cancelError{}
+
+// PendingError signals nothing failed but something is pending. Backed by a distinct
+// concrete type so it is distinguishable from other sentinels in telemetry (via %T)
+// while remaining usable with errors.Is.
+var PendingError error = pendingError{}
 
 func IsUserCancellation(err error) bool {
 	return errors.Is(err, CancelError) || errors.Is(err, terminal.InterruptErr)

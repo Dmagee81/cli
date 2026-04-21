@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -36,6 +37,7 @@ import (
 	"github.com/cli/safeexec"
 	"github.com/mgutz/ansi"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type exitCode int
@@ -174,14 +176,49 @@ func Main() exitCode {
 
 	rootCmd.SetArgs(expandedArgs)
 
-	if cmd, err := rootCmd.ExecuteContextC(ctx); err != nil {
+	var executedCmd *cobra.Command
+	var errorDims map[string]string
+	defer func() {
+		if executedCmd == nil {
+			telemetryService.Record(ghtelemetry.Event{
+				Type: "missing_command",
+			})
+
+			return
+		}
+
+		if cmdutil.IsTelemetryDisabled(executedCmd) {
+			return
+		}
+
+		var flags []string
+		executedCmd.Flags().Visit(func(f *pflag.Flag) {
+			flags = append(flags, f.Name)
+		})
+		slices.Sort(flags)
+
+		var dimensions = ghtelemetry.Dimensions{
+			"command": executedCmd.CommandPath(),
+			"flags":   strings.Join(flags, ","),
+		}
+		maps.Copy(dimensions, errorDims)
+
+		telemetryService.Record(ghtelemetry.Event{
+			Type:       "command_invocation",
+			Dimensions: dimensions,
+		})
+	}()
+
+	if executedCmd, err = rootCmd.ExecuteContextC(ctx); err != nil {
+		errorDims = newErrDims(err)
+
 		var pagerPipeError *iostreams.ErrClosedPagerPipe
 		var noResultsError cmdutil.NoResultsError
 		var extError *root.ExternalCommandExitError
 		var authError *root.AuthError
-		if err == cmdutil.SilentError {
+		if errors.Is(err, cmdutil.SilentError) {
 			return exitError
-		} else if err == cmdutil.PendingError {
+		} else if errors.Is(err, cmdutil.PendingError) {
 			return exitPending
 		} else if cmdutil.IsUserCancellation(err) {
 			if errors.Is(err, terminal.InterruptErr) {
@@ -205,7 +242,7 @@ func Main() exitCode {
 			return exitCode(extError.ExitCode())
 		}
 
-		printError(stderr, err, cmd, hasDebug)
+		printError(stderr, err, executedCmd, hasDebug)
 
 		if strings.Contains(err.Error(), "Incorrect function") {
 			fmt.Fprintln(stderr, "You appear to be running in MinTTY without pseudo terminal support.")
@@ -249,6 +286,35 @@ func Main() exitCode {
 	}
 
 	return exitOK
+}
+
+func newErrDims(err error) ghtelemetry.Dimensions {
+	if err == nil {
+		return ghtelemetry.Dimensions{"outcome": "success"}
+	}
+
+	errTypes := grabAllUnwrappableNestedErrorTypes(err)
+
+	var pagerPipeError *iostreams.ErrClosedPagerPipe
+	var noResultsError cmdutil.NoResultsError
+	if errors.Is(err, cmdutil.PendingError) || cmdutil.IsUserCancellation(err) || errors.As(err, &pagerPipeError) || errors.As(err, &noResultsError) {
+		return ghtelemetry.Dimensions{"outcome": "success", "errTypes": errTypes}
+	}
+
+	return ghtelemetry.Dimensions{
+		"outcome":  "error",
+		"errTypes": errTypes,
+	}
+}
+
+// This is a pretty janky way to get some privacy-respecting visibility into
+// what kind of error we're dealing with. It is not at all intended to be comprehensive.
+func grabAllUnwrappableNestedErrorTypes(err error) string {
+	var types []string
+	for i := 0; err != nil && i < 100; i, err = i+1, errors.Unwrap(err) {
+		types = append(types, fmt.Sprintf("%T", err))
+	}
+	return strings.Join(types, ",")
 }
 
 // isExtensionCommand returns true if args resolve to an extension command.
